@@ -37,57 +37,75 @@ This project is a full-stack Selenium-based automation pipeline for web scraping
 
 ## Architecture Diagram
 
+```mermaid
 flowchart TD
     A[Developer] --> B{Execution Mode}
+
     B -->|Local| C[python main.py]
     B -->|Cloud| D[pytest -n 5]
-    C --> E[driver factory - Local Chrome]
-    D --> F[driver factory - BrowserStack Remote]
-    F --> G[browserstack caps - 5 Configurations]
+
+    C --> E[driver_factory\nLocal Chrome Driver]
+    D --> F[driver_factory\nBrowserStack Remote Driver]
+
+    F --> G[browserstack_caps\n5 Capabilities]
     G --> G1[Chrome Windows 11]
     G --> G2[Firefox Windows 11]
     G --> G3[Safari macOS]
     G --> G4[iPhone 14]
     G --> G5[Samsung S22]
-    E --> H[elpais scraper]
+
+    E --> H[elpais_scraper\nelpais.com/opinion]
     G1 --> H
     G2 --> H
     G3 --> H
     G4 --> H
     G5 --> H
-    H --> H1[Accept Cookies]
-    H1 --> H2[Get 5 Article Links]
-    H2 --> H3[Scrape Title + Content + Image]
-    H3 --> I[image downloader - Save Locally]
-    H3 --> J[translator - Google Translate API]
-    J --> J1[Translate Title ES to EN]
-    J --> J2[Translate Content ES to EN]
-    J1 --> K[text analyzer]
+
+    H --> H1[accept cookies]
+    H1 --> H2[get 5 article links]
+    H2 --> H3[scrape title + content + image]
+
+    H3 --> I[image_downloader\nSave to output folder]
+    H3 --> J[translator\nGoogle Translate API]
+
+    J --> J1[translate title ES to EN]
+    J --> J2[translate content ES to EN chunked]
+
+    J1 --> K[text_analyzer]
     J2 --> K
-    K --> K1[Raw Word Frequency]
-    K --> K2[Semantic Word Frequency]
-    I --> L[Supabase Storage]
+
+    K --> K1[find_repeated_words_raw]
+    K --> K2[find_repeated_words_semantic]
+
+    I --> L[Supabase Storage\narticle-images bucket]
     L --> L1[Public Image URL]
+
     H3 --> M[Supabase PostgreSQL]
     J1 --> M
     J2 --> M
     L1 --> M
     K1 --> M
     K2 --> M
-    M --> M1[test runs table]
+
+    M --> M1[test_runs table]
     M --> M2[articles table]
-    M --> M3[word frequency table]
-    H3 --> N[output writer - articles.json]
+    M --> M3[word_frequency table]
+
+    H3 --> N[output_writer\noutput/articles.json]
+
     M1 --> O[FastAPI Backend]
     M2 --> O
     M3 --> O
+
     O --> O1[GET /dashboard]
     O --> O2[GET /articles]
     O --> O3[GET /test-runs]
     O --> O4[GET /analysis]
     O --> O5[GET /docs]
+
     O --> P[Railway Deployment]
     P --> Q[Public Live URL]
+
     style A fill:#2c3e50,color:#fff
     style Q fill:#27ae60,color:#fff
     style M fill:#3ECF8E,color:#000
@@ -342,7 +360,11 @@ python -m pytest tests/test_browserstack.py -n 5 -v
 ### BrowserStack Dashboard
 ![Screenshot of Dashboard](assets/Build.png)
 
-**Session Links**: [View BrowserStack Build](https://automate.browserstack.com/projects/Default+Project/builds/Untitled+Build+Run/2?tab=tests&testListView=spec&public_token=4cb164f18b3c9f83d3ad97d7397ebbc3beffec72881f9bc551a0357b96287a78)
+**Session Links** : [View BrowserStack Build](https://automate.browserstack.com/projects/ElPais+Scraper/builds/Build/2?tab=tests&testListView=spec)
+
+
+Session videos, logs, and network traces are available
+
 
 ---
 
