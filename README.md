@@ -365,7 +365,9 @@ python -m pytest tests/test_browserstack.py -n 5 -v
 
 
 Session videos, logs, and network traces are available
-
+### Dashboard
+![Screenshot of Dashboard](assets/dashboard2.png)
+![Screenshot of Dashboard](assets/dashboard1.png)
 
 ---
 
