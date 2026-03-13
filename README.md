@@ -11,10 +11,10 @@
 ![Tests](https://img.shields.io/badge/Tests-Passing-brightgreen)
 
 ## Live Demo
-- **Dashboard**: https://your-app.up.railway.app/dashboard
-- **API Docs**: https://your-app.up.railway.app/docs
-- **Articles API**: https://your-app.up.railway.app/articles
-- **Test Runs API**: https://your-app.up.railway.app/test-runs
+- **Dashboard**: https://web-production-08130.up.railway.app/dashboard
+- **API Docs**: https://web-production-08130.up.railway.app/docs
+- **Articles API**: https://web-production-08130.up.railway.app/articles
+- **Test Runs API**: https://web-production-08130.up.railway.app/test-runs
 
 ---
 
@@ -245,7 +245,7 @@ BrowserStack-Assignment/
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-username/BrowserStack-Assignment.git
+git clone https://github.com/Rishushukla157/Browserstack.git
 cd BrowserStack-Assignment
 ```
 
