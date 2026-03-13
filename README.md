@@ -354,11 +354,12 @@ python -m pytest tests/test_browserstack.py -n 5 -v
 ## Results
 
 ### Local Execution
-![Screenshot of console output](assets/image2.png)
 ![Screenshot of console output](assets/image1.png)
+
 
 ### BrowserStack Dashboard
 ![Screenshot of Dashboard](assets/Build.png)
+![Screenshot of console output](assets/Build.1.png)
 
 **Session Links** : [View BrowserStack Build](https://automate.browserstack.com/projects/ElPais+Scraper/builds/Build/2?tab=tests&testListView=spec)
 
