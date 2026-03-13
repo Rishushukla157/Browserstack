@@ -361,7 +361,7 @@ python -m pytest tests/test_browserstack.py -n 5 -v
 ![Screenshot of Dashboard](assets/Build.png)
 ![Screenshot of console output](assets/Build.1.png)
 
-**Session Links** : [View BrowserStack Build](https://automate.browserstack.com/projects/ElPais+Scraper/builds/Build/2?tab=tests&testListView=spec)
+**Session Links** : [View BrowserStack Build](https://automate.browserstack.com/projects/ElPais+Scraper/builds/Build/2?tab=tests&testListView=spec&public_token=3e43cfbd4fcc4d3580e56a811d3832908dbacfa1a8234184faa156830d0e3ee3)
 
 
 Session videos, logs, and network traces are available
