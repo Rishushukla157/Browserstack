@@ -17,9 +17,10 @@ def accept_cookies(driver):
             )
         )
         btn.click()
+        print("[SCRAPER] 🍪 Cookie banner dismissed")
         time.sleep(1)
     except:
-        pass
+        pass  # no banner = fine
 
 
 def get_opinion_article_links(driver):
@@ -43,8 +44,152 @@ def get_opinion_article_links(driver):
     return links
 
 
+def _extract_title(driver, index):
+    """
+    Try title selectors in order.
+    Filters junk by checking against known section label words.
+    Falls back to og:title and <title> tag if all selectors fail.
+    """
+    JUNK_WORDS = {
+        "opinion", "opinión", "editorial", "columna", "tribuna",
+        "análisis", "analisis", "carta", "archivo", "sección"
+    }
+
+    title_selectors = [
+        "h1.a_t",
+        "h1.a_e_t",
+        "h1[class*='_t']",
+        "h1[class*='title']",
+        "h1[class*='articulo']",
+        "article h1",
+        "h1",
+    ]
+
+    for sel in title_selectors:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, sel)
+            for el in elements:
+                text = el.text.strip()
+                if not text:
+                    continue
+                if text.lower() in JUNK_WORDS:
+                    print(f"[SCRAPER] Skipping junk label: '{text}'")
+                    continue
+                if len(text.split()) >= 2 or len(text) >= 4:
+                    print(f"[SCRAPER] Title matched: '{sel}' → {text[:60]}")
+                    return text
+        except:
+            continue
+
+    # ── Fallback 1: og:title meta tag ─────────────────────────
+    try:
+        og       = driver.find_element(By.CSS_SELECTOR, "meta[property='og:title']")
+        og_title = og.get_attribute("content").strip().split(" | ")[0].strip()
+        if og_title:
+            print(f"[SCRAPER] Title from og:title → {og_title[:60]}")
+            return og_title
+    except:
+        pass
+
+    # ── Fallback 2: <title> tag ───────────────────────────────
+    try:
+        page_title = driver.title.strip().split(" | ")[0].strip()
+        if page_title and len(page_title) >= 4:
+            print(f"[SCRAPER] Title from <title> tag → {page_title[:60]}")
+            return page_title
+    except:
+        pass
+
+    print(f"[SCRAPER] Title not found for article {index}")
+    return ""
+
+
+def _extract_content(driver, index):
+    """
+    Try content selectors in order.
+    If paywalled, still tries to get visible subtitle/standfirst.
+    """
+    content_selectors = [
+        "div[data-dtm-region='articulo_cuerpo']",
+        "div.a_c",
+        "div[class*='article-body']",
+        "div[class*='article_body']",
+        "div[class*='articulo-cuerpo']",
+        "div[class*='cuerpo']",
+        "div[class*='body']",
+        "div[class*='content']",
+        "div[class*='a_b']",
+        "section[class*='article']",
+        "article",
+    ]
+
+    for selector in content_selectors:
+        try:
+            container  = driver.find_element(By.CSS_SELECTOR, selector)
+            paragraphs = container.find_elements(By.TAG_NAME, "p")
+            # ✅ Skip paragraphs that look like cookie consent text
+            clean_paragraphs = [
+                p.text.strip() for p in paragraphs
+                if p.text.strip()
+                and "partners" not in p.text.lower()
+                and "personalised advertising" not in p.text.lower()
+                and "cookies" not in p.text.lower()[:50]
+            ]
+            text = " ".join(clean_paragraphs)
+            if text:
+                print(f"[SCRAPER] Content matched: '{selector}' ({len(clean_paragraphs)} paragraphs)")
+                return text
+        except:
+            continue
+
+    # ── Global <p> fallback ───────────────────────────────────
+    all_ps = driver.find_elements(By.TAG_NAME, "p")
+    clean  = [
+        p.text.strip() for p in all_ps
+        if len(p.text.strip()) > 40
+        and "partners" not in p.text.lower()
+        and "personalised advertising" not in p.text.lower()
+        and "cookies" not in p.text.lower()[:50]
+    ]
+    if clean:
+        print(f"[SCRAPER] Content from global <p> fallback ({len(clean)} clean tags)")
+        return " ".join(clean)
+
+    # ── Paywall detection ─────────────────────────────────────
+    page_src     = driver.page_source.lower()
+    is_paywalled = any(k in page_src for k in ["suscri", "paywall", "regwall", "piano-id"])
+
+    if is_paywalled:
+        print(f"[SCRAPER] ⚠️  Article {index} is PAYWALLED — trying subtitle")
+
+        subtitle_selectors = [
+            "h2.a_st",
+            "h2[class*='sub']",
+            "p.a_st",
+            "div.a_st",
+            "[class*='standfirst']",
+            "[class*='subtitle']",
+            "[class*='subhead']",
+            "[class*='lead']",
+            "[class*='deck']",
+            "header p",
+        ]
+        for sel in subtitle_selectors:
+            try:
+                el   = driver.find_element(By.CSS_SELECTOR, sel)
+                text = el.text.strip()
+                if len(text) > 20:
+                    print(f"[SCRAPER] Subtitle matched: '{sel}'")
+                    return f"[Paywalled — preview only] {text}"
+            except:
+                continue
+
+        return "Content not available (paywalled)"
+
+    return "Content not available"
+
+
 def scrape_article(driver, url, index=0, test_run_id=None):
-    # ── Load page with timeout protection ───────────────────
     try:
         driver.set_page_load_timeout(60)
         driver.get(url)
@@ -53,55 +198,18 @@ def scrape_article(driver, url, index=0, test_run_id=None):
 
     time.sleep(2)
 
-    wait = WebDriverWait(driver, 20)
+    # ✅ Dismiss cookie banner on EVERY article page
+    accept_cookies(driver)
 
-    # ── Title ────────────────────────────────────────────────
-    title = ""
-    try:
-        title_el = wait.until(
-            EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "h1.a_t, h1[class*='title'], article h1")
-            )
-        )
-        title = title_el.text.strip()
-    except:
-        print(f"[SCRAPER] Title not found for article {index}")
+    # Give page time to settle after dismissing banner
+    time.sleep(2)
 
-    # ── Content ──────────────────────────────────────────────
-    content = ""
-    try:
-        content_selectors = [
-            "div[data-dtm-region='articulo_cuerpo']",
-            "div.a_c",
-            "article div.article-body",
-            "div.article_body"
-        ]
-        for selector in content_selectors:
-            try:
-                container  = driver.find_element(By.CSS_SELECTOR, selector)
-                paragraphs = container.find_elements(By.TAG_NAME, "p")
-                content    = " ".join([p.text.strip() for p in paragraphs if p.text.strip()])
-                if content:
-                    break
-            except:
-                continue
-
-        if not content:
-            paragraphs = driver.find_elements(By.CSS_SELECTOR, "article p")
-            content    = " ".join([p.text.strip() for p in paragraphs if p.text.strip()])
-
-        if not content:
-            content = "Content not available"
-
-    except Exception as e:
-        print(f"[SCRAPER] Content not found for article {index}: {e}")
-        content = "Content not available"
+    # ── Title & Content ───────────────────────────────────────
+    title   = _extract_title(driver, index)
+    content = _extract_content(driver, index)
 
     # ── Image ─────────────────────────────────────────────────
-    image_url    = None
-    local_path   = None
-    supabase_url = None
-
+    image_url = local_path = supabase_url = None
     try:
         img       = driver.find_element(By.CSS_SELECTOR, "figure img, article img")
         image_url = img.get_attribute("src")
@@ -109,15 +217,12 @@ def scrape_article(driver, url, index=0, test_run_id=None):
         pass
 
     if image_url:
-        # Save locally first
         local_path = download_image(image_url, index)
-
-        # Then upload to Supabase Storage
         if local_path:
             storage_result = save_and_upload_image(local_path, f"article_{index}.jpg")
             supabase_url   = storage_result["supabase_url"]
 
-    # ── Save to Supabase DB ───────────────────────────────────
+    # ── DB Save ───────────────────────────────────────────────
     article_data = {
         "title":            title,
         "content":          content,
