@@ -24,4 +24,8 @@ Thumbs.db
 
 dist/
 build/
-*.egg-info/
+*.egg-info/venv/
+output/
+.env
+__pycache__/
+*.pyc

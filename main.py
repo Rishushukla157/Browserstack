@@ -4,20 +4,12 @@ from scraping.elpais_scraper import get_opinion_article_links, scrape_article
 from translation.translator import translate_to_english, translate_content
 from analysis.text_analyzer import find_repeated_words_raw, find_repeated_words_semantic
 from utils.output_writer import save_json
-from backend.database import db
-import threading
-
-# ┌──────────────────────────────────────────────┐
-# │  🔧 TOGGLE MODE HERE                         │
-# │  True  = Multithreaded (fast, parallel)      │
-# │  False = Sequential    (slow, 1 browser)     │
-# └──────────────────────────────────────────────┘
-USE_MULTITHREADING =  False
-
-db_lock = threading.Lock()
 
 
-def process_article(idx, link, test_run_id, driver=None):
+USE_MULTITHREADING = True
+
+
+def process_article(idx, link, driver=None):
     """
     Sequential mode : driver is passed in → reused, NOT quit after
     Multithreaded   : driver=None → creates its own, quits after
@@ -29,7 +21,7 @@ def process_article(idx, link, test_run_id, driver=None):
     try:
         print(f"[THREAD] 🚀 Starting article {idx + 1}")
 
-        data    = scrape_article(driver, link, index=idx + 1, test_run_id=test_run_id)
+        data    = scrape_article(driver, link, index=idx + 1)
         title   = data["title"]   or "No title found"
         content = data["content"] or "No content found"
 
@@ -37,18 +29,12 @@ def process_article(idx, link, test_run_id, driver=None):
         translated_title = ""
         if data["title"]:
             translated_title = translate_to_english(data["title"])
-            if data.get("db_id") and translated_title:
-                with db_lock:
-                    db.update_article_translation(data["db_id"], translated_title)
 
         # ── Translate Content ─────────────────────────────────
         translated_content = ""
         if content and content not in ("No content found", "Content not available", "Content not available (paywalled)"):
             print(f"[TRANSLATOR] Translating content for article {idx + 1}...")
             translated_content = translate_content(content)
-            if data.get("db_id") and translated_content:
-                with db_lock:
-                    db.update_article_content_translation(data["db_id"], translated_content)
 
         print(f"\n📰 ARTICLE {idx + 1}")
         print(f"  Spanish Title   : {title}")
@@ -71,27 +57,27 @@ def process_article(idx, link, test_run_id, driver=None):
 
 
 # ── Sequential: 1 browser, navigates article to article ───────
-def _run_sequential(links, test_run_id, driver):
+def _run_sequential(links, driver):
     print("[PIPELINE] 🐢 Mode: Sequential (1 browser reused)")
     results = []
     for idx, link in enumerate(links):
         print(f"\n{'='*50}\nProcessing article {idx + 1}")
         try:
             # ✅ Pass shared driver → no new window opens
-            results.append(process_article(idx, link, test_run_id, driver=driver))
+            results.append(process_article(idx, link, driver=driver))
         except Exception as e:
             print(f"[PIPELINE] ❌ Article {idx + 1} failed: {e}")
     return results
 
 
 # ── Multithreaded: 5 browsers simultaneously ──────────────────
-def _run_multithreaded(links, test_run_id):
+def _run_multithreaded(links):
     print("[PIPELINE] ⚡ Mode: Multithreaded (1 browser per thread)")
     results = []
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {
             # ✅ No driver passed → each thread creates & quits its own
-            executor.submit(process_article, idx, link, test_run_id): idx
+            executor.submit(process_article, idx, link): idx
             for idx, link in enumerate(links)
         }
         for future in as_completed(futures):
@@ -106,20 +92,19 @@ def _run_multithreaded(links, test_run_id):
     return results
 
 
-def run_pipeline(driver, test_run_id=None):
+def run_pipeline(driver):
     links = get_opinion_article_links(driver)
     print(f"Found {len(links)} articles")
 
     if USE_MULTITHREADING:
-        # Main driver only used for link collection above
-        results = _run_multithreaded(links, test_run_id)
+        results = _run_multithreaded(links)
     else:
         # ✅ Pass same driver → single window, no new tabs
-        results = _run_sequential(links, test_run_id, driver)
+        results = _run_sequential(links, driver)
 
     translated_titles = [r["english_title"] for r in results if r["english_title"]]
-    raw_result      = find_repeated_words_raw(translated_titles,      test_run_id=test_run_id)
-    semantic_result = find_repeated_words_semantic(translated_titles, test_run_id=test_run_id)
+    raw_result      = find_repeated_words_raw(translated_titles)
+    semantic_result = find_repeated_words_semantic(translated_titles)
 
     print(f"\n{'='*50}")
     print("RAW REPEATED WORDS (>2 times):")
@@ -140,17 +125,11 @@ def run_pipeline(driver, test_run_id=None):
 
 
 if __name__ == "__main__":
-    test_run = db.create_test_run(browser="chrome", platform="local", session_id="local-run")
-    run_id   = test_run.get("id", None)
-    driver   = get_local_driver()
+    driver = get_local_driver()
     try:
-        run_pipeline(driver, test_run_id=run_id)
-        if run_id:
-            db.update_test_run_status(run_id, "passed")
+        run_pipeline(driver)
         print(f"\n✅ Pipeline completed successfully")
     except Exception as e:
-        if run_id:
-            db.update_test_run_status(run_id, "failed")
         print(f"\n❌ Pipeline failed: {e}")
         raise
     finally:

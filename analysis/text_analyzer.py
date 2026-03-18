@@ -1,43 +1,49 @@
 from collections import Counter
-from backend.database import db
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+import string
+
+# Download required NLTK data (run once)
+nltk.download('stopwords')
+nltk.download('punkt')
+nltk.download('punkt_tab')
 
 
-def find_repeated_words_raw(headers, test_run_id=None):
+def _process_headers(headers, use_stopwords=False, threshold=2):
+    """
+    Private helper — shared logic between both functions.
+    Avoids code duplication.
+    """
+    # 1. Filter out None values
     valid_headers = [h for h in headers if h is not None]
     if not valid_headers:
         return {}
 
-    combined   = " ".join(valid_headers).lower()
-    words      = combined.split()
-    word_counts = Counter(words)
-    result     = {word: count for word, count in word_counts.items() if count > 2}
+    # 2. Combine all headers into one string
+    combined = " ".join(valid_headers).lower()
 
-    # Save to Supabase
-    if test_run_id and result:
-        db.save_word_frequency(test_run_id, result)
+    # 3. NLTK tokenizer — handles punctuation, contractions, special chars
+    #    e.g. "price," → "price"  |  "it's" → "it", "'s"
+    tokens = word_tokenize(combined)
 
-    return result
+    # 4. Strip out pure punctuation tokens like ".", ",", "!", "--"
+    tokens = [t for t in tokens if t not in string.punctuation]
+
+    # 5. Optionally remove stopwords using NLTK's built-in list
+    #    NLTK has 179 English stopwords vs our old hardcoded ~20
+    if use_stopwords:
+        stop_words = set(stopwords.words('english'))
+        tokens = [t for t in tokens if t not in stop_words]
+
+    # 6. Count and filter by threshold
+    word_counts = Counter(tokens)
+    return {word: count for word, count in word_counts.items() if count > threshold}
 
 
-def find_repeated_words_semantic(headers, test_run_id=None):
-    valid_headers = [h for h in headers if h is not None]
-    if not valid_headers:
-        return {}
+def find_repeated_words_raw(headers, threshold=2):
+    return _process_headers(headers, use_stopwords=False, threshold=threshold)
 
-    STOPWORDS = {
-        "the", "and", "to", "of", "a", "in", "is", "for",
-        "on", "with", "at", "by", "an", "be", "this",
-        "that", "from", "as", "it", "are"
-    }
 
-    combined       = " ".join(valid_headers).lower()
-    words          = combined.split()
-    filtered_words = [w for w in words if w not in STOPWORDS]
-    word_counts    = Counter(filtered_words)
-    result         = {word: count for word, count in word_counts.items() if count > 2}
-
-    # Save to Supabase
-    if test_run_id and result:
-        db.save_word_frequency(test_run_id, result)
-
-    return result
+def find_repeated_words_semantic(headers, threshold=2):
+    return _process_headers(headers, use_stopwords=True, threshold=threshold)

@@ -1,60 +1,125 @@
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from backend.database import db
-from backend.storage import save_and_upload_image
+from selenium.common.exceptions import TimeoutException, WebDriverException
+from bs4 import BeautifulSoup
 from utils.image_downloader import download_image
 import time
+import random
+import logging
+
+# ── Logging Setup ─────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+log = logging.getLogger(__name__)
 
 OPINION_URL = "https://elpais.com/opinion/"
+MAX_RETRIES = 3
 
+JUNK_WORDS = {
+    "opinion", "opinión", "editorial", "columna", "tribuna",
+    "análisis", "analisis", "carta", "archivo", "sección"
+}
+
+JUNK_PHRASES = [
+    "partners", "personalised advertising",
+    "cookies", "subscribe", "suscri"
+]
+
+
+# ── Helpers ───────────────────────────────────────────────────
+
+def _random_sleep(min_s=1.5, max_s=3.5):
+    """Random delay to mimic human behaviour."""
+    time.sleep(random.uniform(min_s, max_s))
+
+
+def _is_clean_paragraph(text):
+    text_lower = text.lower()
+    return (
+        len(text) > 40
+        and not any(phrase in text_lower[:80] for phrase in JUNK_PHRASES)
+    )
+
+
+def _get_soup(driver):
+    """
+    ✅ THE KEY HANDOFF
+    Selenium renders the JS → Beautiful Soup parses the HTML.
+    Call this after page is fully loaded.
+    """
+    html = driver.page_source        # grab fully rendered HTML from Selenium
+    return BeautifulSoup(html, "html.parser")  # hand to Beautiful Soup
+
+
+# ── Cookie Banner ─────────────────────────────────────────────
+# ✅ Selenium handles this — BS4 can't click buttons
 
 def accept_cookies(driver):
     try:
-        btn = WebDriverWait(driver, 5).until(
-            EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "button#didomi-notice-agree-button, button[aria-label='Aceptar']")
-            )
+        btn = WebDriverWait(driver, 6).until(
+            EC.element_to_be_clickable((
+                By.CSS_SELECTOR,
+                "button#didomi-notice-agree-button, button[aria-label='Aceptar']"
+            ))
         )
         btn.click()
-        print("[SCRAPER] 🍪 Cookie banner dismissed")
-        time.sleep(1)
-    except:
-        pass  # no banner = fine
+        log.info("[COOKIES] 🍪 Banner dismissed")
+        _random_sleep(0.8, 1.5)
+    except TimeoutException:
+        log.debug("[COOKIES] No banner found — continuing")
+    except Exception as e:
+        log.warning(f"[COOKIES] Unexpected error: {e}")
 
 
-def get_opinion_article_links(driver):
+# ── Article Links ─────────────────────────────────────────────
+
+def get_opinion_article_links(driver, max_links=5):
     driver.get(OPINION_URL)
-    time.sleep(2)
+    _random_sleep()
     accept_cookies(driver)
 
-    wait = WebDriverWait(driver, 20)
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "article")))
+    # ✅ Selenium waits for JS to render articles
+    try:
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "article h2 a"))
+        )
+    except TimeoutException:
+        log.error("[LINKS] Timed out waiting for article list")
+        return []
 
-    articles = driver.find_elements(By.CSS_SELECTOR, "article h2 a")
+    # ✅ Hand off to Beautiful Soup
+    soup = _get_soup(driver)
 
+    # ✅ CSS Selectors inside Beautiful Soup
+    anchors = soup.select("article h2 a")
+
+    seen  = set()
     links = []
-    for a in articles:
-        href = a.get_attribute("href")
-        if href and "/opinion/" in href and href not in links:
+    for a in anchors:
+        href = a.get("href")
+        # Fix relative URLs
+        if href and href.startswith("/"):
+            href = "https://elpais.com" + href
+        if href and "/opinion/" in href and href not in seen:
+            seen.add(href)
             links.append(href)
-        if len(links) == 5:
+        if len(links) == max_links:
             break
 
+    log.info(f"[LINKS] Found {len(links)} article links")
     return links
 
 
-def _extract_title(driver, index):
-    """
-    Try title selectors in order.
-    Filters junk by checking against known section label words.
-    Falls back to og:title and <title> tag if all selectors fail.
-    """
-    JUNK_WORDS = {
-        "opinion", "opinión", "editorial", "columna", "tribuna",
-        "análisis", "analisis", "carta", "archivo", "sección"
-    }
+# ── Title Extraction ──────────────────────────────────────────
 
+def _extract_title(soup, index):
+    """
+    ✅ Pure Beautiful Soup + CSS Selectors.
+    No Selenium needed here at all.
+    """
     title_selectors = [
         "h1.a_t",
         "h1.a_e_t",
@@ -67,47 +132,42 @@ def _extract_title(driver, index):
 
     for sel in title_selectors:
         try:
-            elements = driver.find_elements(By.CSS_SELECTOR, sel)
+            elements = soup.select(sel)
             for el in elements:
-                text = el.text.strip()
-                if not text:
-                    continue
-                if text.lower() in JUNK_WORDS:
-                    print(f"[SCRAPER] Skipping junk label: '{text}'")
+                text = el.get_text(strip=True)
+                if not text or text.lower() in JUNK_WORDS:
                     continue
                 if len(text.split()) >= 2 or len(text) >= 4:
-                    print(f"[SCRAPER] Title matched: '{sel}' → {text[:60]}")
+                    log.info(f"[TITLE] Matched '{sel}' → {text[:60]}")
                     return text
-        except:
-            continue
+        except Exception as e:
+            log.debug(f"[TITLE] Selector failed '{sel}': {e}")
 
-    # ── Fallback 1: og:title meta tag ─────────────────────────
-    try:
-        og       = driver.find_element(By.CSS_SELECTOR, "meta[property='og:title']")
-        og_title = og.get_attribute("content").strip().split(" | ")[0].strip()
-        if og_title:
-            print(f"[SCRAPER] Title from og:title → {og_title[:60]}")
-            return og_title
-    except:
-        pass
+    # Fallback 1: og:title
+    og = soup.select_one("meta[property='og:title']")
+    if og and og.get("content"):
+        og_title = og["content"].strip().split(" | ")[0]
+        log.info(f"[TITLE] From og:title → {og_title[:60]}")
+        return og_title
 
-    # ── Fallback 2: <title> tag ───────────────────────────────
-    try:
-        page_title = driver.title.strip().split(" | ")[0].strip()
-        if page_title and len(page_title) >= 4:
-            print(f"[SCRAPER] Title from <title> tag → {page_title[:60]}")
+    # Fallback 2: <title> tag
+    title_tag = soup.select_one("title")
+    if title_tag:
+        page_title = title_tag.get_text().strip().split(" | ")[0]
+        if len(page_title) >= 4:
+            log.info(f"[TITLE] From <title> tag → {page_title[:60]}")
             return page_title
-    except:
-        pass
 
-    print(f"[SCRAPER] Title not found for article {index}")
+    log.warning(f"[TITLE] Not found for article {index}")
     return ""
 
 
-def _extract_content(driver, index):
+# ── Content Extraction ────────────────────────────────────────
+
+def _extract_content(soup, index):
     """
-    Try content selectors in order.
-    If paywalled, still tries to get visible subtitle/standfirst.
+    ✅ Pure Beautiful Soup + CSS Selectors.
+    Selenium already rendered the JS — BS4 just parses.
     """
     content_selectors = [
         "div[data-dtm-region='articulo_cuerpo']",
@@ -123,120 +183,127 @@ def _extract_content(driver, index):
         "article",
     ]
 
-    for selector in content_selectors:
+    for sel in content_selectors:
         try:
-            container  = driver.find_element(By.CSS_SELECTOR, selector)
-            paragraphs = container.find_elements(By.TAG_NAME, "p")
-            # ✅ Skip paragraphs that look like cookie consent text
-            clean_paragraphs = [
-                p.text.strip() for p in paragraphs
-                if p.text.strip()
-                and "partners" not in p.text.lower()
-                and "personalised advertising" not in p.text.lower()
-                and "cookies" not in p.text.lower()[:50]
+            container = soup.select_one(sel)
+            if not container:
+                continue
+            paragraphs = container.find_all("p")
+            clean = [
+                p.get_text(strip=True)
+                for p in paragraphs
+                if _is_clean_paragraph(p.get_text(strip=True))
             ]
-            text = " ".join(clean_paragraphs)
-            if text:
-                print(f"[SCRAPER] Content matched: '{selector}' ({len(clean_paragraphs)} paragraphs)")
-                return text
-        except:
-            continue
+            if clean:
+                log.info(f"[CONTENT] Matched '{sel}' ({len(clean)} paragraphs)")
+                return " ".join(clean)
+        except Exception as e:
+            log.debug(f"[CONTENT] Selector failed '{sel}': {e}")
 
-    # ── Global <p> fallback ───────────────────────────────────
-    all_ps = driver.find_elements(By.TAG_NAME, "p")
-    clean  = [
-        p.text.strip() for p in all_ps
-        if len(p.text.strip()) > 40
-        and "partners" not in p.text.lower()
-        and "personalised advertising" not in p.text.lower()
-        and "cookies" not in p.text.lower()[:50]
+    # Global <p> fallback
+    all_ps = soup.find_all("p")
+    clean = [
+        p.get_text(strip=True)
+        for p in all_ps
+        if _is_clean_paragraph(p.get_text(strip=True))
     ]
     if clean:
-        print(f"[SCRAPER] Content from global <p> fallback ({len(clean)} clean tags)")
+        log.info(f"[CONTENT] Global <p> fallback ({len(clean)} paragraphs)")
         return " ".join(clean)
 
-    # ── Paywall detection ─────────────────────────────────────
-    page_src     = driver.page_source.lower()
-    is_paywalled = any(k in page_src for k in ["suscri", "paywall", "regwall", "piano-id"])
+    # Paywall detection
+    page_text    = soup.get_text().lower()
+    is_paywalled = any(k in page_text for k in ["suscri", "paywall", "regwall", "piano-id"])
 
     if is_paywalled:
-        print(f"[SCRAPER] ⚠️  Article {index} is PAYWALLED — trying subtitle")
-
+        log.warning(f"[CONTENT] ⚠️ Article {index} PAYWALLED — trying subtitle")
         subtitle_selectors = [
-            "h2.a_st",
-            "h2[class*='sub']",
-            "p.a_st",
-            "div.a_st",
-            "[class*='standfirst']",
-            "[class*='subtitle']",
-            "[class*='subhead']",
-            "[class*='lead']",
-            "[class*='deck']",
-            "header p",
+            "h2.a_st", "h2[class*='sub']", "p.a_st", "div.a_st",
+            "[class*='standfirst']", "[class*='subtitle']",
+            "[class*='subhead']", "[class*='lead']",
+            "[class*='deck']", "header p",
         ]
         for sel in subtitle_selectors:
-            try:
-                el   = driver.find_element(By.CSS_SELECTOR, sel)
-                text = el.text.strip()
+            el = soup.select_one(sel)
+            if el:
+                text = el.get_text(strip=True)
                 if len(text) > 20:
-                    print(f"[SCRAPER] Subtitle matched: '{sel}'")
+                    log.info(f"[CONTENT] Subtitle matched: '{sel}'")
                     return f"[Paywalled — preview only] {text}"
-            except:
-                continue
 
         return "Content not available (paywalled)"
 
     return "Content not available"
 
 
-def scrape_article(driver, url, index=0, test_run_id=None):
-    try:
-        driver.set_page_load_timeout(60)
-        driver.get(url)
-    except Exception:
-        print(f"[SCRAPER] Page load timeout for article {index} — using partial content")
+# ── Image Extraction ──────────────────────────────────────────
 
-    time.sleep(2)
+IMAGE_SELECTORS = [
+    "figure.a_e_m img",
+    "figure[class*='article'] img",
+    "div[class*='article'] figure img",
+    "figure img[src*='imagenes']",
+    "figure img",
+    "article img",
+]
 
-    # ✅ Dismiss cookie banner on EVERY article page
+def _extract_image(soup):
+    """✅ Pure Beautiful Soup image extraction."""
+    for sel in IMAGE_SELECTORS:
+        try:
+            img = soup.select_one(sel)
+            if img:
+                src = img.get("src") or img.get("data-src")
+                if src and src.startswith("http"):
+                    log.info(f"[IMAGE] Matched '{sel}' → {src[:60]}")
+                    return src
+        except Exception as e:
+            log.debug(f"[IMAGE] Selector failed '{sel}': {e}")
+    return None
+
+
+# ── Main Scrape with Retry ────────────────────────────────────
+
+def scrape_article(driver, url, index=0):
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            driver.set_page_load_timeout(60)
+            driver.get(url)
+            break
+        except TimeoutException:
+            log.warning(f"[SCRAPER] Timeout attempt {attempt}/{MAX_RETRIES} for article {index}")
+            if attempt == MAX_RETRIES:
+                log.error(f"[SCRAPER] All retries failed for {url}")
+                return None
+        except WebDriverException as e:
+            log.error(f"[SCRAPER] WebDriver error on article {index}: {e}")
+            if attempt == MAX_RETRIES:
+                return None
+
+    _random_sleep()
     accept_cookies(driver)
+    _random_sleep()
 
-    # Give page time to settle after dismissing banner
-    time.sleep(2)
+    # ✅ Selenium renders JS → hand off to Beautiful Soup
+    soup = _get_soup(driver)
 
-    # ── Title & Content ───────────────────────────────────────
-    title   = _extract_title(driver, index)
-    content = _extract_content(driver, index)
+    title     = _extract_title(soup, index)
+    content   = _extract_content(soup, index)
+    image_url = _extract_image(soup)
 
-    # ── Image ─────────────────────────────────────────────────
-    image_url = local_path = supabase_url = None
-    try:
-        img       = driver.find_element(By.CSS_SELECTOR, "figure img, article img")
-        image_url = img.get_attribute("src")
-    except:
-        pass
-
+    local_path = None
     if image_url:
         local_path = download_image(image_url, index)
-        if local_path:
-            storage_result = save_and_upload_image(local_path, f"article_{index}.jpg")
-            supabase_url   = storage_result["supabase_url"]
 
-    # ── DB Save ───────────────────────────────────────────────
     article_data = {
         "title":            title,
         "content":          content,
-        "image_url":        supabase_url or image_url or "",
+        "image_url":        image_url or "",
         "image_local_path": local_path or "",
         "article_url":      url,
-        "test_run_id":      test_run_id,
     }
 
-    db_record = {}
-    if test_run_id:
-        db_record = db.save_article(article_data)
+    log.info(f"[SCRAPER] ✅ Article {index} done — '{title[:50]}'")
+    _random_sleep()
 
-    return {
-        **article_data,
-        "db_id": db_record.get("id") if db_record else None,
-    }
+    return article_data
