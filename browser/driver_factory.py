@@ -50,7 +50,7 @@ def get_browserstack_driver(capabilities_dict):
 
     driver = webdriver.Remote(
         command_executor=url,
-        options=options
+        options=options,
     )
 
     # Hide Selenium signature on remote browser too

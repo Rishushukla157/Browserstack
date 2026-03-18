@@ -6,17 +6,14 @@ from analysis.text_analyzer import find_repeated_words_raw, find_repeated_words_
 from utils.output_writer import save_json
 
 
-USE_MULTITHREADING = True
+USE_MULTITHREADING = False
 
 
 def process_article(idx, link, driver=None):
-    """
-    Sequential mode : driver is passed in → reused, NOT quit after
-    Multithreaded   : driver=None → creates its own, quits after
-    """
-    own_driver = driver is None      # did THIS call create the driver?
+    
+    own_driver = driver is None      
     if own_driver:
-        driver = get_local_driver()  # each thread gets its own
+        driver = get_local_driver()  
 
     try:
         print(f"[THREAD] 🚀 Starting article {idx + 1}")
@@ -53,7 +50,7 @@ def process_article(idx, link, driver=None):
 
     finally:
         if own_driver:
-            driver.quit()  # only quit if THIS call created it
+            driver.quit()  
 
 
 # ── Sequential: 1 browser, navigates article to article ───────
